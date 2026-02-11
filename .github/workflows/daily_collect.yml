@@ -1,0 +1,51 @@
+name: Daily Startup Support Postings Collector
+
+on:
+  schedule:
+    # 매일 KST 오전 11시 = UTC 02:00 실행 (series_a 채널에 11시 보고)
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # 수동 실행 허용
+
+concurrency:
+  group: collect-and-notify
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect-and-notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run collector and notifier
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          SMES_API_KEY: ${{ secrets.SMES_API_KEY }}
+          KSTARTUP_API_KEY: ${{ secrets.KSTARTUP_API_KEY }}
+          DB_PATH: data/postings.db
+        run: python -m src.main
+
+      - name: Commit updated database
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          git add data/postings.db
+          git diff --staged --quiet || git commit -m "chore: update postings database ($(date -u +%Y-%m-%d))"
+          git push
