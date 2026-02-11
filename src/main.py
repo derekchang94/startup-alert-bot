@@ -12,6 +12,11 @@ from src.database import Database
 from src.collectors.bizinfo import BizinfoCollector
 from src.collectors.smes import SmesCollector
 from src.collectors.kstartup import KStartupCollector
+from src.collectors.tips import TipsCollector
+from src.collectors.tipa import TipaCollector
+from src.collectors.nipa import NipaCollector
+from src.collectors.thevc import TheVCCollector
+from src.collectors.mss import MssCollector
 from src.notifier import SlackNotifier
 from src.filters import filter_relevant_postings
 
@@ -27,8 +32,13 @@ def collect_postings(db: Database) -> int:
     """모든 수집기를 실행하고 신규 공고 수 반환"""
     collectors = []
 
-    # 기업마당은 웹 크롤링 방식 (API 키 불필요)
+    # 웹 크롤링 수집기 (API 키 불필요)
     collectors.append(BizinfoCollector())
+    collectors.append(TipsCollector())
+    collectors.append(TipaCollector())
+    collectors.append(NipaCollector())
+    collectors.append(TheVCCollector())
+    collectors.append(MssCollector())
 
     if Config.SMES_API_KEY:
         collectors.append(SmesCollector())

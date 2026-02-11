@@ -36,12 +36,13 @@ class SlackNotifier:
 
         # 1. 메인 메시지 전송 → thread_ts 확보
         today = datetime.now().strftime("%Y-%m-%d")
-        summary_lines = []
-        for i, p in enumerate(postings, 1):
-            cat = f"[{p.get('category', '')}] " if p.get("category") else ""
-            summary_lines.append(f"{i}. {cat}{p['title']}")
 
-        summary_text = "\n".join(summary_lines)
+        # 소스별 건수 집계
+        source_counts = {}
+        for p in postings:
+            src = p.get("source", "기타")
+            source_counts[src] = source_counts.get(src, 0) + 1
+        source_summary = " | ".join(f"{k}: {v}건" for k, v in source_counts.items())
 
         main_blocks = [
             {
@@ -56,7 +57,10 @@ class SlackNotifier:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f":mega: *신규 공고 {len(postings)}건*이 수집되었습니다.\n\n{summary_text}",
+                    "text": (
+                        f":mega: *신규 스타트업/해외진출 관련 공고 {len(postings)}건*\n\n"
+                        f":bar_chart: {source_summary}"
+                    ),
                 },
             },
             {"type": "divider"},
