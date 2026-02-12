@@ -2,8 +2,8 @@ name: Daily Startup Support Postings Collector
 
 on:
   schedule:
-    # 매일 KST 오전 11시 = UTC 02:00 실행 (series_a 채널에 11시 보고)
-    - cron: '0 2 * * *'
+    # 매일 KST 오전 11:07 = UTC 02:07 실행 (정각 부하 회피)
+    - cron: '7 2 * * *'
   workflow_dispatch:  # 수동 실행 허용
 
 concurrency:
