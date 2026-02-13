@@ -48,6 +48,7 @@ jobs:
           git config --local user.name "GitHub Action Bot"
           git add data/postings.db
           git diff --staged --quiet || git commit -m "chore: update postings database ($(date -u +%Y-%m-%d))"
+          git pull --rebase origin main
           git push
 
       - name: Notify Slack on failure
