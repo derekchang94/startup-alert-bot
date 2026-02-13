@@ -2,9 +2,9 @@ name: Daily Startup Support Postings Collector
 
 on:
   schedule:
-    # 매일 KST 오전 11:07 = UTC 02:07 실행 (정각 부하 회피)
+    # 매일 KST 오전 11:07 = UTC 02:07 (GitHub cron 백업 - 외부 cron이 주 트리거)
     - cron: '7 2 * * *'
-  workflow_dispatch:  # 수동 실행 허용
+  workflow_dispatch:  # 수동 실행 + 외부 cron 트리거용
 
 concurrency:
   group: collect-and-notify
@@ -49,3 +49,24 @@ jobs:
           git add data/postings.db
           git diff --staged --quiet || git commit -m "chore: update postings database ($(date -u +%Y-%m-%d))"
           git push
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+        run: |
+          curl -s -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"channel\": \"$SLACK_CHANNEL\",
+              \"text\": \":warning: 스타트업 공고 봇 실행 실패! GitHub Actions 로그를 확인해주세요.\",
+              \"blocks\": [{
+                \"type\": \"section\",
+                \"text\": {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \":rotating_light: *스타트업 공고 봇 실행 실패*\n\n실행 시간: $(date -u '+%Y-%m-%d %H:%M UTC')\n트리거: ${{ github.event_name }}\n\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|:link: 로그 확인>\"
+                }
+              }]
+            }"
