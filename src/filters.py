@@ -6,11 +6,13 @@
 
 필터링 정책:
 1. 스타트업 또는 해외진출 관련 키워드 매칭
-2. 지방 한정 공고 배제 (특정 지역 소재 기업만 지원 가능한 공고)
+2. 지방/경기 한정 공고 배제 (서울 소재 기업만 지원 가능한 공고만 포함)
    - 단, 지방에서 시행하더라도 전국 대상이면 포함
+3. 만료(종료일 경과) 또는 과거 연도 공고 배제
 """
 import re
 import logging
+from datetime import datetime, date
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -45,19 +47,23 @@ ALL_KEYWORDS = STARTUP_KEYWORDS + GLOBAL_KEYWORDS
 
 # ── 지역 제한 배제 필터 ──
 
-# 수도권 (서울 서초구 기업이 참여 가능한 지역)
+# 서울권만 허용 (서울 서초구 기업이 참여 가능한 지역)
+# 주의: 경기, 인천은 서울과 별개이므로 METRO_AREA에서 제외
 METRO_AREA = [
-    "서울", "경기", "인천", "수도권",
+    "서울", "수도권",
 ]
 
-# 지방 지역명 (이 지역 소재 기업 '한정' 공고는 배제)
+# 지방 + 경기/인천 지역명 (이 지역 소재 기업 '한정' 공고는 배제)
 REGIONAL_AREAS = [
+    "경기", "인천",
     "부산", "대구", "광주", "대전", "울산", "세종",
     "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
     "충청", "전라", "경상",
     "강릉", "춘천", "원주", "청주", "천안", "전주", "목포",
     "순천", "여수", "포항", "구미", "김해", "창원", "진주",
     "제주시", "서귀포",
+    "경기도", "인천시", "인천광역시",
+    "부산광역시", "대구광역시", "광주광역시", "대전광역시", "울산광역시",
 ]
 
 # 지역 한정을 나타내는 패턴 (지역명 + 이 패턴 → 배제 대상)
@@ -71,6 +77,9 @@ REGIONAL_RESTRICTION_PATTERNS = [
     r"(에|도|시|군)\s*위치한",
     r"지역\s*(기업|업체|소재|한정)",
     r"관내\s*(기업|업체|소재)",
+    r"(도|시|군|구)\s*소재",
+    r"지역\s*내\s",
+    r"(입주|등록|소재).*기업",
 ]
 
 # 전국 대상임을 나타내는 키워드 (이 키워드가 있으면 지역 제한 배제 안 함)
@@ -81,8 +90,54 @@ NATIONWIDE_KEYWORDS = [
 ]
 
 
+def _is_expired_or_outdated(posting: dict) -> bool:
+    """만료되었거나 과거 연도의 공고인지 확인
+
+    True를 반환하면 배제 대상
+    """
+    today = date.today()
+
+    end_date_str = posting.get("end_date", "").strip()
+    start_date_str = posting.get("start_date", "").strip()
+
+    # D-day 형식 (thevc 등)은 검증 스킵
+    if end_date_str and not re.match(r"^\d{4}-\d{2}-\d{2}$", end_date_str):
+        return False
+
+    # end_date가 있고 이미 지난 경우 → 만료
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            if end_date < today:
+                logger.debug(f"만료 공고 배제: {posting.get('title', '')} (마감: {end_date_str})")
+                return True
+        except ValueError:
+            pass
+
+    # start_date가 작년 이전이고 end_date가 없거나 작년인 경우 → 오래된 공고
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+            if start_date.year < today.year:
+                # end_date도 없거나 작년이면 배제
+                if not end_date_str:
+                    logger.debug(f"과거 연도 공고 배제: {posting.get('title', '')} (시작: {start_date_str})")
+                    return True
+                try:
+                    end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                    if end_date.year < today.year:
+                        logger.debug(f"과거 연도 공고 배제: {posting.get('title', '')} ({start_date_str}~{end_date_str})")
+                        return True
+                except ValueError:
+                    return True
+        except ValueError:
+            pass
+
+    return False
+
+
 def _is_region_restricted(posting: dict) -> bool:
-    """지방 한정 공고인지 판별
+    """지방/경기 한정 공고인지 판별
 
     True를 반환하면 배제 대상 (서울 서초구 기업이 참여 불가능)
     """
@@ -106,7 +161,7 @@ def _is_region_restricted(posting: dict) -> bool:
         if area in searchable:
             return False
 
-    # 3) 지방 지역명 + 제한 패턴 조합 검사
+    # 3) 지방/경기/인천 지역명 + 제한 패턴 조합 검사
     for area in REGIONAL_AREAS:
         if area not in searchable:
             continue
@@ -134,12 +189,25 @@ def _is_region_restricted(posting: dict) -> bool:
 
 
 def filter_relevant_postings(postings: List[dict]) -> List[dict]:
-    """스타트업 또는 해외진출 관련 공고만 필터링 + 지역 제한 공고 배제"""
-    keyword_matched = []
-    region_excluded = 0
+    """스타트업 또는 해외진출 관련 공고만 필터링
 
+    필터링 순서:
+    1. 만료/과거 연도 공고 배제
+    2. 키워드 매칭 (스타트업/해외진출)
+    3. 지역 제한 공고 배제 (경기/지방 한정)
+    """
+    # 1단계: 만료/과거 연도 공고 제거
+    date_valid = []
+    date_excluded = 0
     for posting in postings:
-        # 제목, 카테고리, 지원대상, 요약에서 키워드 매칭
+        if _is_expired_or_outdated(posting):
+            date_excluded += 1
+        else:
+            date_valid.append(posting)
+
+    # 2단계: 키워드 매칭
+    keyword_matched = []
+    for posting in date_valid:
         searchable = " ".join([
             posting.get("title", ""),
             posting.get("category", ""),
@@ -153,8 +221,9 @@ def filter_relevant_postings(postings: List[dict]) -> List[dict]:
             posting["_matched_keywords"] = matched
             keyword_matched.append(posting)
 
-    # 키워드 매칭된 공고 중 지역 제한 공고 배제
+    # 3단계: 지역 제한 공고 배제
     filtered = []
+    region_excluded = 0
     for posting in keyword_matched:
         if _is_region_restricted(posting):
             region_excluded += 1
@@ -162,7 +231,10 @@ def filter_relevant_postings(postings: List[dict]) -> List[dict]:
             filtered.append(posting)
 
     logger.info(
-        f"필터링 결과: {len(postings)}건 중 키워드 매칭 {len(keyword_matched)}건, "
-        f"지역 제한 배제 {region_excluded}건 → 최종 {len(filtered)}건"
+        f"필터링 결과: 전체 {len(postings)}건 → "
+        f"만료/과거 배제 {date_excluded}건, "
+        f"키워드 매칭 {len(keyword_matched)}건, "
+        f"지역 제한 배제 {region_excluded}건 → "
+        f"최종 {len(filtered)}건"
     )
     return filtered

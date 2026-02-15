@@ -1,14 +1,13 @@
 name: Daily Startup Support Postings Collector
 
 on:
-  schedule:
-    # 매일 KST 오전 11:07 = UTC 02:07 (GitHub cron 백업 - 외부 cron이 주 트리거)
-    - cron: '7 2 * * *'
-  workflow_dispatch:  # 수동 실행 + 외부 cron 트리거용
+  # 외부 cron(cron-job.org)에서 매일 KST 11:00에 workflow_dispatch 호출
+  # 내부 cron 스케줄은 이중 트리거 방지를 위해 제거함
+  workflow_dispatch:
 
 concurrency:
   group: collect-and-notify
-  cancel-in-progress: false
+  cancel-in-progress: true  # 이미 실행 중이면 새 실행 취소
 
 permissions:
   contents: write

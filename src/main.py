@@ -1,6 +1,14 @@
-"""메인 실행 스크립트 - 수집 + Slack 알림 오케스트레이션"""
+"""메인 실행 스크립트 - 수집 + Slack 알림 오케스트레이션
+
+실행 정책:
+- 하루 1회 오전 11시 실행 (외부 cron 트리거)
+- 이번 실행에서 신규 수집된 공고만 필터링하여 Slack 발송
+- 이미 DB에 존재하는 공고는 무시 (중복 발송 방지)
+- 같은 날 이미 발송했으면 재발송하지 않음
+"""
 import sys
 import logging
+from datetime import datetime
 from pathlib import Path
 
 # 프로젝트 루트를 sys.path에 추가
@@ -28,8 +36,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def collect_postings(db: Database) -> int:
-    """모든 수집기를 실행하고 신규 공고 수 반환"""
+def collect_postings(db: Database) -> list:
+    """모든 수집기를 실행하고 신규 공고 목록(dict 리스트) 반환
+
+    DB에 이미 존재하는 공고는 insert_posting()에서 걸러지므로,
+    반환되는 리스트는 이번 실행에서 처음 발견된 공고만 포함.
+    """
     collectors = []
 
     # 웹 크롤링 수집기 (API 키 불필요)
@@ -52,37 +64,19 @@ def collect_postings(db: Database) -> int:
 
     if not collectors:
         logger.error("활성화된 수집기가 없습니다. API 키를 설정해주세요.")
-        return 0
+        return []
 
-    new_count = 0
+    new_postings = []
     for collector in collectors:
         try:
             postings = collector.collect()
             for posting in postings:
                 if db.insert_posting(posting):
-                    new_count += 1
+                    new_postings.append(posting)
         except Exception as e:
             logger.error(f"{collector.__class__.__name__} 실행 실패: {e}")
 
-    return new_count
-
-
-def send_notifications(db: Database) -> bool:
-    """미발송 공고 중 스타트업/해외진출 관련만 Slack으로 전송"""
-    notifier = SlackNotifier()
-    unnotified = db.get_unnotified_postings()
-    logger.info(f"미발송 공고: {len(unnotified)}건")
-
-    # 스타트업/해외진출 관련 공고만 필터링
-    unnotified = filter_relevant_postings(unnotified)
-
-    success = notifier.send_daily_report(unnotified)
-
-    if success and unnotified:
-        db.mark_as_notified([p["id"] for p in unnotified])
-        logger.info(f"{len(unnotified)}건 알림 완료 처리")
-
-    return success
+    return new_postings
 
 
 def main():
@@ -96,22 +90,41 @@ def main():
 
     db = Database()
     try:
-        # 1. 공고 수집
-        new_count = collect_postings(db)
-        logger.info(f"신규 수집: {new_count}건")
+        # 0. 오늘 이미 알림을 보냈는지 확인 → 중복 발송 방지
+        today = datetime.now().strftime("%Y-%m-%d")
+        if db.has_sent_today(today):
+            logger.info(f"{today} 알림 이미 발송 완료 - 중복 발송 방지로 종료")
+            return
 
-        # 2. Slack 알림
-        success = send_notifications(db)
+        # 1. 공고 수집 (DB 기준 신규 공고만 반환)
+        new_postings = collect_postings(db)
+        logger.info(f"신규 수집: {len(new_postings)}건")
 
-        # 3. 통계 출력
+        # 2. 필터링 (만료/과거 배제 → 키워드 매칭 → 지역 제한 배제)
+        filtered = filter_relevant_postings(new_postings)
+        logger.info(f"필터링 후 발송 대상: {len(filtered)}건")
+
+        # 3. Slack 알림 발송
+        notifier = SlackNotifier()
+        success = notifier.send_daily_report(filtered)
+
+        if success:
+            # 오늘 발송 기록 (중복 발송 방지)
+            db.record_daily_send(today, len(filtered))
+            # 신규 수집된 모든 공고를 알림 처리 (필터에서 탈락한 것 포함)
+            # → 다음 실행에서 재처리되지 않도록
+            if new_postings:
+                db.mark_as_notified([p["id"] for p in new_postings])
+            logger.info(f"알림 발송 완료 (발송 {len(filtered)}건 / 수집 {len(new_postings)}건)")
+        else:
+            logger.warning("Slack 알림 전송에 문제가 발생했습니다.")
+            sys.exit(1)
+
+        # 4. 통계 출력
         stats = db.get_stats()
         logger.info(f"DB 통계 - 전체: {stats['total']}, 알림완료: {stats['notified']}, 대기: {stats['pending']}")
         for source, cnt in stats["by_source"].items():
             logger.info(f"  {source}: {cnt}건")
-
-        if not success:
-            logger.warning("Slack 알림 전송에 문제가 발생했습니다.")
-            sys.exit(1)
 
         logger.info("모든 작업 완료")
 

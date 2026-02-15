@@ -138,11 +138,11 @@ class SlackNotifier:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f":memo: *{today}* - 오늘 신규 스타트업/해외진출 관련 공고가 없습니다.",
+                    "text": f":memo: *{today}* - 오늘은 신규 지원사업이 없습니다.",
                 },
             }
         ]
-        ts = self._post_message(blocks, "오늘 신규 공고 없음")
+        ts = self._post_message(blocks, "오늘은 신규 지원사업이 없습니다")
         return ts is not None
 
     def _post_message(

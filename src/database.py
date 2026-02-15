@@ -39,6 +39,12 @@ class Database:
                 ON postings(end_date);
             CREATE INDEX IF NOT EXISTS idx_postings_collected
                 ON postings(collected_at);
+
+            CREATE TABLE IF NOT EXISTS daily_sends (
+                send_date TEXT PRIMARY KEY,
+                sent_count INTEGER NOT NULL,
+                sent_at TEXT NOT NULL
+            );
         """)
         self.conn.commit()
 
@@ -74,8 +80,23 @@ class Database:
         self.conn.commit()
         return True
 
+    def has_sent_today(self, today: str) -> bool:
+        """오늘 이미 알림을 발송했는지 확인"""
+        cursor = self.conn.execute(
+            "SELECT 1 FROM daily_sends WHERE send_date = ?", (today,)
+        )
+        return cursor.fetchone() is not None
+
+    def record_daily_send(self, today: str, count: int):
+        """오늘 알림 발송 기록"""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO daily_sends (send_date, sent_count, sent_at) VALUES (?, ?, ?)",
+            (today, count, datetime.now().isoformat()),
+        )
+        self.conn.commit()
+
     def get_unnotified_postings(self) -> List[dict]:
-        """아직 알림을 보내지 않은 공고 목록 조회"""
+        """아직 알림을 보내지 않은 공고 목록 조회 (디버깅/통계용)"""
         cursor = self.conn.execute("""
             SELECT * FROM postings
             WHERE is_notified = 0
@@ -91,16 +112,6 @@ class Database:
             [(now, pid) for pid in posting_ids],
         )
         self.conn.commit()
-
-    def get_expiring_soon(self, days: int = 3) -> List[dict]:
-        """마감 임박 공고 조회 (D-N일 이내)"""
-        cursor = self.conn.execute("""
-            SELECT * FROM postings
-            WHERE end_date != ''
-              AND date(end_date) BETWEEN date('now') AND date('now', ? || ' days')
-            ORDER BY end_date ASC
-        """, (str(days),))
-        return [dict(row) for row in cursor.fetchall()]
 
     def get_stats(self) -> dict:
         """수집 통계"""

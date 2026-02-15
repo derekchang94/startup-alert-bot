@@ -76,3 +76,21 @@ def test_stats(db, sample_posting):
     assert stats["total"] == 1
     assert stats["pending"] == 1
     assert stats["by_source"]["bizinfo"] == 1
+
+
+def test_has_sent_today_false(db):
+    """발송 기록이 없으면 False"""
+    assert db.has_sent_today("2026-02-16") is False
+
+
+def test_has_sent_today_true(db):
+    """발송 기록이 있으면 True"""
+    db.record_daily_send("2026-02-16", 5)
+    assert db.has_sent_today("2026-02-16") is True
+
+
+def test_daily_send_prevents_duplicate(db):
+    """같은 날 중복 발송 방지"""
+    db.record_daily_send("2026-02-16", 3)
+    assert db.has_sent_today("2026-02-16") is True
+    assert db.has_sent_today("2026-02-17") is False
